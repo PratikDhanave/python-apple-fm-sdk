@@ -25,7 +25,7 @@ and Apple's [Human Interface Guidelines on Generative AI](https://developer.appl
 ## Requirements
 
 - macOS 26.0+
-- Download [Xcode 26.0+](https://developer.apple.com/xcode/) and agree to the [Xcode and Apple SDKs agreement](https://www.apple.com/legal/sla/docs/xcode.pdf) in the Xcode app.
+- Command Line Tools for Xcode 26.0+ (`xcode-select --install`) or [Xcode 26.0+](https://developer.apple.com/xcode/) (with the [Xcode and Apple SDKs agreement](https://www.apple.com/legal/sla/docs/xcode.pdf) accepted)
 - Python 3.10+
 - Apple Intelligence turned on for [a compatible Mac](https://support.apple.com/en-us/121115)
 

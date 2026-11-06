@@ -82,73 +82,61 @@ def _build_c_bindings(
             "No `swift` executable found in PATH. Is `swift` set up on your system?"
         )
 
-    # Check if xcode-select points to a full Xcode installation (not just Command Line Tools)
+    # Check Swift version >= 6.2 (ships with macOS 26 SDK support).
+    # Works with both full Xcode installations and Command Line Tools.
     try:
-        developer_dir = subprocess.run(
-            ["xcode-select", "-p"],
+        swift_version_output = subprocess.run(
+            ["swift", "--version"],
             check=True,
             capture_output=True,
             text=True,
         ).stdout.strip()
 
-        # Command Line Tools path is typically /Library/Developer/CommandLineTools
-        # Full Xcode path is typically /Applications/Xcode.app/Contents/Developer
-        if "CommandLineTools" in developer_dir:
-            raise SwiftToolingError(
-                f"The active developer directory is set to Command Line Tools ({developer_dir}), "
-                "but a full Xcode installation is required. Please install Xcode. Then open Xcode"
-                "at least once to accept the license agreement and install the Swift SDKs."
-            )
-    except subprocess.CalledProcessError as e:
-        raise SwiftToolingError(
-            f"Failed to check active developer directory: {e.stderr if e.stderr else str(e)}"
+        version_match = re.search(
+            r"Swift\s+version\s+(\d+)\.(\d+)", swift_version_output
         )
-
-    # Check if Xcode is installed and version >= 26.0
-    if shutil.which("xcodebuild") is None:
-        raise SwiftToolingError(
-            "No `xcodebuild` executable found in PATH. Is Xcode installed on your system?"
-        )
-
-    try:
-        xcode_version_output = subprocess.run(
-            ["xcodebuild", "-version"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-
-        # Parse version from output like "Xcode 26.0" or "Xcode 26.0.1"
-        version_match = re.search(r"Xcode\s+(\d+)\.(\d+)", xcode_version_output)
         if not version_match:
             raise SwiftToolingError(
-                f"Could not parse Xcode version from: {xcode_version_output}"
+                f"Could not parse Swift version from: {swift_version_output}"
             )
 
-        major_version = int(version_match.group(1))
-        minor_version = int(version_match.group(2))
+        swift_major = int(version_match.group(1))
+        swift_minor = int(version_match.group(2))
 
-        if major_version < 26:
+        if (swift_major, swift_minor) < (6, 2):
             raise SwiftToolingError(
-                f"Xcode version {major_version}.{minor_version} found, but version 26.0 or higher is required."
+                f"Swift version {swift_major}.{swift_minor} found, but version 6.2 or higher is required. "
+                "Please update your Command Line Tools or Xcode installation."
             )
     except subprocess.CalledProcessError as e:
-        error_msg = e.stderr if e.stderr else str(e)
-        # Provide helpful message if the error is about Command Line Tools
-        if "command line tools instance" in error_msg.lower():
+        error_msg = (e.stderr or e.stdout or str(e)).strip()
+        if "license" in error_msg.lower():
             raise SwiftToolingError(
-                "Xcode is not properly configured. The active developer directory points to "
-                "Command Line Tools instead of a full Xcode installation. Please install Xcode "
-                "from the App Store and run 'sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer'"
+                "The Xcode or Command Line Tools license agreement has not been accepted. "
+                "Run `sudo xcodebuild -license` or open Xcode at least once to accept the "
+                "license agreement and install the Swift SDKs."
             )
-        raise SwiftToolingError(f"Failed to check Xcode version: {error_msg}")
+        raise SwiftToolingError(f"Failed to check Swift version: {error_msg}")
+
+    # Verify that an active macOS 26+ SDK is available (via Command Line Tools or Xcode)
+    sdk_major = _macos_sdk_major_version()
+    if sdk_major is None:
+        raise SwiftToolingError(
+            "Could not detect an active macOS SDK. Please install Command Line Tools "
+            "(`xcode-select --install`) or install Xcode, then open Xcode at least once "
+            "to accept the license agreement and install the Swift SDKs."
+        )
+    if sdk_major < 26:
+        raise SwiftToolingError(
+            f"macOS SDK version {sdk_major} found, but version 26 or higher is required. "
+            "Please update your Command Line Tools or Xcode installation."
+        )
 
     swiftPackageDir = Path("foundation-models-c").resolve()
 
     # `Attachment` (image support) only exists in the macOS 27+ SDK
     extra_swift_args = []
-    sdk_major = _macos_sdk_major_version()
-    if sdk_major is not None and sdk_major >= 27:
+    if sdk_major >= 27:
         extra_swift_args += ["-Xswiftc", "-DFM_HAS_MACOS_27_SDK"]
 
     try:
