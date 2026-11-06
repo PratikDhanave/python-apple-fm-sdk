@@ -95,3 +95,12 @@ Handle tool-specific errors:
         print(f"Tool error: {e.tool_name} - {e.underlying_error}")
     except Exception as e:
         print(f"Error: {e}")
+
+Event loop considerations
+-------------------------
+
+When the model invokes a tool from its native generation threads, each ``call()`` runs on a dedicated
+background thread with its own event loop. If your tool needs to interact with primitives or client
+sessions bound to the caller's ``asyncio`` event loop (for example, an ``asyncio.Lock`` or an MCP client
+session), schedule that work onto the caller's loop with ``asyncio.run_coroutine_threadsafe`` and await
+``asyncio.wrap_future(...)``.

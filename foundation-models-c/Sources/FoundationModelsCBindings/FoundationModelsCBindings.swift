@@ -179,7 +179,8 @@ private func tokenCountUnsupportedOSError() -> Error {
     domain: "TokenCount",
     code: -1,
     userInfo: [
-      NSLocalizedDescriptionKey: "Token counting requires macOS 26.4, iOS 26.4, or visionOS 26.4 or later."
+      NSLocalizedDescriptionKey:
+        "Token counting requires macOS 26.4, iOS 26.4, or visionOS 26.4 or later."
     ]
   )
 }
@@ -1781,11 +1782,11 @@ final class BridgedTool: Tool {
   func call(arguments: GeneratedContent) async throws -> String {
     let arguments = GeneratedContentWrapper(content: arguments)
     let id = nextID()
-    foreignCall(FMGeneratedContentRef(Unmanaged.passRetained(arguments).toOpaque()), id)
     return try await withCheckedThrowingContinuation { continuation in
       outputContinuation.withLock {
         $0[id] = continuation
       }
+      foreignCall(FMGeneratedContentRef(Unmanaged.passRetained(arguments).toOpaque()), id)
     }
   }
 }
@@ -1837,10 +1838,9 @@ public func FMBridgedToolFinishCall(
   output: UnsafePointer<CChar>
 ) {
   let bridgedTool = Unmanaged<BridgedTool>.fromOpaque(tool).takeUnretainedValue()
-  bridgedTool.outputContinuation.withLock {
-    if let continuation = $0[callId] {
-      continuation.resume(returning: String(cString: output))
-      $0.removeValue(forKey: callId)
-    }
+  let outputString = String(cString: output)
+  let continuation = bridgedTool.outputContinuation.withLock {
+    $0.removeValue(forKey: callId)
   }
+  continuation?.resume(returning: outputString)
 }

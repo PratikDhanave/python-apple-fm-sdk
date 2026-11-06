@@ -163,6 +163,10 @@ class Tool(_ManagedObject, ABC):
         - Tool names should be descriptive and follow snake_case convention
         - Descriptions should explain the tool's purpose and when to use it
         - The ``call()`` method must be async even if it doesn't perform async operations
+        - When invoked by native generation threads, each ``call()`` executes on a dedicated
+          background thread and event loop; if a tool needs to use objects bound to the
+          caller's event loop (such as an ``asyncio.Lock`` or async client session), schedule
+          that work onto the caller's loop with ``asyncio.run_coroutine_threadsafe()``
         - Tools are automatically managed by the session's lifecycle
         - Multiple tools can be registered with a single session
 
@@ -280,11 +284,14 @@ class Tool(_ManagedObject, ABC):
                         result_bytes = result.encode("utf-8")
                         lib.FMBridgedToolFinishCall(self._ptr, call_id, result_bytes)
 
-                    except Exception as e:
-                        # On error, finish with error message
+                    except BaseException as e:
+                        # On error (including CancelledError), always finish so the native
+                        # continuation is resumed rather than left suspended
                         error_msg = f"Tool error: {str(e)}"
                         error_bytes = error_msg.encode("utf-8")
                         lib.FMBridgedToolFinishCall(self._ptr, call_id, error_bytes)
+                        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                            raise
 
                 # Schedule the async callable
                 # Try to get the current running loop, or create a new one
