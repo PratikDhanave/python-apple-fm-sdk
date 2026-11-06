@@ -25,7 +25,7 @@ Requirements
 Since this SDK calls the on-device foundation model at the core of Apple Intelligence it requires:
 
 * macOS 26.0+
-* Download `Xcode 26.0+ <https://developer.apple.com/xcode/>`_ and agree to the `Xcode and Apple SDKs agreement <https://www.apple.com/legal/sla/docs/xcode.pdf>`_ in the Xcode app.
+* Command Line Tools for Xcode 26.0+ (``xcode-select --install``) or `Xcode 26.0+ <https://developer.apple.com/xcode/>`_ (with the `Xcode and Apple SDKs agreement <https://www.apple.com/legal/sla/docs/xcode.pdf>`_ accepted)
 * Python 3.10+
 * Apple Intelligence turned on for a `compatible device <https://support.apple.com/en-us/121115>`_
 

@@ -17,7 +17,7 @@ Before you begin, ensure you have:
 
 1. **Compatible Hardware**: macOS 26.0+ on compatible Mac that supports Apple Intelligence
 
-2. **Xcode Installed**: Xcode 26.0+ or later with command line tools installed. **Tip**: Make sure your Xcode version matches your macOS version to avoid model compatibility issues.
+2. **Swift Toolchain**: Command Line Tools for Xcode 26.0+ (``xcode-select --install``) or Xcode 26.0+. **Tip**: Make sure your active macOS SDK version matches your macOS version to avoid model compatibility issues.
 
 3. **Python Environment**: Python 3.10 or later installed
 
