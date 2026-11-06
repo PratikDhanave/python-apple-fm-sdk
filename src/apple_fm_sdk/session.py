@@ -135,6 +135,8 @@ class LanguageModelSession(_ManagedObject):
         # Initialize request lock for preventing concurrent requests
         self._request_lock = asyncio.Lock()
         self._active_task = None
+        # Keep Python Tool instances (and their CFUNCTYPE callbacks) alive for the session's lifetime
+        self._tools = list(tools) if tools else []
 
         if _ptr is not None:
             # Internal constructor for specific ptr
@@ -265,6 +267,7 @@ class LanguageModelSession(_ManagedObject):
 
         # Create session instance
         session = cls(_ptr=ptr)
+        session._tools = list(tools) if tools else []
         session.transcript = transcript  # Use the provided transcript
         return session
 
@@ -470,7 +473,9 @@ class LanguageModelSession(_ManagedObject):
             gen_schema = generating.generation_schema()
 
             # Use the schema-based respond method
-            generated_content = await self._respond_with_schema(prompt, gen_schema, options)
+            generated_content = await self._respond_with_schema(
+                prompt, gen_schema, options
+            )
 
             # Convert GeneratedContent to the target type
             return generating._from_generated_content(generated_content)
