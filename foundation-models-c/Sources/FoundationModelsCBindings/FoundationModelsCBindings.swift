@@ -988,6 +988,226 @@ public func FMLanguageModelSessionGetTranscriptJSONString(
   }
 }
 
+// MARK: - LanguageModelFeedback
+
+private struct FeedbackIssuePayload: Decodable {
+  let category: Int32
+  let explanation: String?
+}
+
+private enum FeedbackBindingError: LocalizedError {
+  case invalidArgument(String)
+  case invalidTranscriptEntry(String)
+
+  var errorDescription: String? {
+    switch self {
+    case .invalidArgument(let message), .invalidTranscriptEntry(let message):
+      return message
+    }
+  }
+}
+
+private func mapFeedbackSentiment(
+  _ cSentiment: FMLanguageModelFeedbackSentiment
+) throws -> LanguageModelFeedback.Sentiment? {
+  switch cSentiment {
+  case FMLanguageModelFeedbackSentimentNone:
+    return nil
+  case FMLanguageModelFeedbackSentimentPositive:
+    return .positive
+  case FMLanguageModelFeedbackSentimentNegative:
+    return .negative
+  case FMLanguageModelFeedbackSentimentNeutral:
+    return .neutral
+  default:
+    throw FeedbackBindingError.invalidArgument(
+      "Invalid feedback sentiment raw value: \(cSentiment.rawValue)"
+    )
+  }
+}
+
+private func mapFeedbackIssueCategory(
+  _ rawCategory: Int32
+) throws -> LanguageModelFeedback.Issue.Category {
+  switch FMLanguageModelFeedbackIssueCategory(rawValue: UInt32(bitPattern: rawCategory)) {
+  case FMLanguageModelFeedbackIssueCategoryUnhelpful:
+    return .unhelpful
+  case FMLanguageModelFeedbackIssueCategoryTooVerbose:
+    return .tooVerbose
+  case FMLanguageModelFeedbackIssueCategoryDidNotFollowInstructions:
+    return .didNotFollowInstructions
+  case FMLanguageModelFeedbackIssueCategoryIncorrect:
+    return .incorrect
+  case FMLanguageModelFeedbackIssueCategoryStereotypeOrBias:
+    return .stereotypeOrBias
+  case FMLanguageModelFeedbackIssueCategorySuggestiveOrSexual:
+    return .suggestiveOrSexual
+  case FMLanguageModelFeedbackIssueCategoryVulgarOrOffensive:
+    return .vulgarOrOffensive
+  case FMLanguageModelFeedbackIssueCategoryTriggeredGuardrailUnexpectedly:
+    return .triggeredGuardrailUnexpectedly
+  default:
+    throw FeedbackBindingError.invalidArgument(
+      "Invalid feedback issue category raw value: \(rawCategory)"
+    )
+  }
+}
+
+/// Serializes feedback for the session into a Feedback Assistant attachment archive.
+///
+/// The returned byte buffer is allocated with `malloc` and MUST be freed by calling `FMFreeData()`.
+@_cdecl("FMLanguageModelSessionLogFeedbackAttachment")
+public func FMLanguageModelSessionLogFeedbackAttachment(
+  session: FMLanguageModelSessionRef,
+  sentiment: FMLanguageModelFeedbackSentiment,
+  issuesJSON: UnsafePointer<CChar>?,
+  desiredResponseText: UnsafePointer<CChar>?,
+  desiredResponseContent: FMGeneratedContentRef?,
+  desiredTranscriptEntryJSON: UnsafePointer<CChar>?,
+  outLength: UnsafeMutablePointer<Int>,
+  outErrorCode: UnsafeMutablePointer<Int32>?,
+  outErrorDescription: UnsafeMutablePointer<UnsafePointer<CChar>?>?
+) -> UnsafeMutablePointer<UInt8>? {
+  outLength.pointee = 0
+  let session = Unmanaged<LanguageModelSession>.fromOpaque(session).takeUnretainedValue()
+
+  do {
+    let desiredOutputCount =
+      (desiredResponseText != nil ? 1 : 0)
+      + (desiredResponseContent != nil ? 1 : 0)
+      + (desiredTranscriptEntryJSON != nil ? 1 : 0)
+    if desiredOutputCount > 1 {
+      throw FeedbackBindingError.invalidArgument(
+        "At most one desired output parameter may be specified"
+      )
+    }
+
+    let mappedSentiment = try mapFeedbackSentiment(sentiment)
+
+    var mappedIssues: [LanguageModelFeedback.Issue] = []
+    if let issuesJSON {
+      let issuesJSONStr = String(cString: issuesJSON)
+      let payloads = try JSONDecoder().decode(
+        [FeedbackIssuePayload].self,
+        from: Data(issuesJSONStr.utf8)
+      )
+      mappedIssues = try payloads.map { payload in
+        let category = try mapFeedbackIssueCategory(payload.category)
+        return LanguageModelFeedback.Issue(
+          category: category,
+          explanation: payload.explanation
+        )
+      }
+    }
+
+    let attachmentData: Data
+    if let desiredResponseText {
+      attachmentData = session.logFeedbackAttachment(
+        sentiment: mappedSentiment,
+        issues: mappedIssues,
+        desiredResponseText: String(cString: desiredResponseText)
+      )
+    } else if let desiredResponseContent {
+      let wrapper = Unmanaged<GeneratedContentWrapper>.fromOpaque(desiredResponseContent)
+        .takeUnretainedValue()
+      attachmentData = session.logFeedbackAttachment(
+        sentiment: mappedSentiment,
+        issues: mappedIssues,
+        desiredResponseContent: wrapper.content
+      )
+    } else if let desiredTranscriptEntryJSON {
+      let entryJSONStr = String(cString: desiredTranscriptEntryJSON)
+      let parsedObject = try JSONSerialization.jsonObject(
+        with: Data(entryJSONStr.utf8),
+        options: []
+      )
+      guard let entryDict = parsedObject as? [String: Any] else {
+        throw FeedbackBindingError.invalidTranscriptEntry(
+          "Desired transcript entry JSON must be a JSON object"
+        )
+      }
+      let wrapperObject: [String: Any] = [
+        "version": 1,
+        "type": "FoundationModels.Transcript",
+        "transcript": [
+          "entries": [entryDict]
+        ]
+      ]
+      let wrapperData = try JSONSerialization.data(withJSONObject: wrapperObject, options: [])
+      let decodedTranscript = try JSONDecoder().decode(Transcript.self, from: wrapperData)
+      guard let desiredEntry = decodedTranscript.first else {
+        throw FeedbackBindingError.invalidTranscriptEntry(
+          "Decoded transcript contained no entries"
+        )
+      }
+      attachmentData = session.logFeedbackAttachment(
+        sentiment: mappedSentiment,
+        issues: mappedIssues,
+        desiredOutput: desiredEntry
+      )
+    } else {
+      attachmentData = session.logFeedbackAttachment(
+        sentiment: mappedSentiment,
+        issues: mappedIssues,
+        desiredOutput: nil
+      )
+    }
+
+    let byteCount = attachmentData.count
+    let allocSize = max(byteCount, 1)
+    guard let rawBuffer = malloc(allocSize) else {
+      let message = "Failed to allocate memory for feedback attachment"
+      message.withCString { cString in
+        outErrorCode?.pointee = StatusCode.unknownError.rawValue
+        outErrorDescription?.pointee = UnsafePointer(strdup(cString))
+      }
+      return nil
+    }
+    let buffer = rawBuffer.assumingMemoryBound(to: UInt8.self)
+    if byteCount > 0 {
+      attachmentData.copyBytes(to: buffer, count: byteCount)
+    }
+    outLength.pointee = byteCount
+    outErrorCode?.pointee = StatusCode.success.rawValue
+    return buffer
+  } catch let error as FeedbackBindingError {
+    let statusCode: Int32
+    switch error {
+    case .invalidArgument:
+      statusCode = StatusCode.invalidArgument.rawValue
+    case .invalidTranscriptEntry:
+      statusCode = StatusCode.decodingFailure.rawValue
+    }
+    let debugDescription = error.localizedDescription
+    debugDescription.withCString { cString in
+      outErrorCode?.pointee = statusCode
+      outErrorDescription?.pointee = UnsafePointer(strdup(cString))
+    }
+    return nil
+  } catch is DecodingError {
+    let debugDescription = "Failed to decode feedback JSON payload"
+    debugDescription.withCString { cString in
+      outErrorCode?.pointee = StatusCode.decodingFailure.rawValue
+      outErrorDescription?.pointee = UnsafePointer(strdup(cString))
+    }
+    return nil
+  } catch let error as NSError where error.domain == NSCocoaErrorDomain {
+    let debugDescription = formatErrorDescription(error)
+    debugDescription.withCString { cString in
+      outErrorCode?.pointee = StatusCode.decodingFailure.rawValue
+      outErrorDescription?.pointee = UnsafePointer(strdup(cString))
+    }
+    return nil
+  } catch {
+    let debugDescription = formatErrorDescription(error)
+    debugDescription.withCString { cString in
+      outErrorCode?.pointee = StatusCode.unknownError.rawValue
+      outErrorDescription?.pointee = UnsafePointer(strdup(cString))
+    }
+    return nil
+  }
+}
+
 // MARK: - Task management
 
 @_cdecl("FMTaskCancel")
@@ -1017,6 +1237,13 @@ public func FMRelease(_ object: UnsafeRawPointer) {
 ///         that explicitly document the need to free the returned string.
 @_cdecl("FMFreeString")
 public func FMFreeString(_ ptr: UnsafeMutablePointer<CChar>?) {
+  free(ptr)
+}
+
+/// Frees a byte buffer allocated by Foundation Models C API (for example,
+/// `FMLanguageModelSessionLogFeedbackAttachment`).
+@_cdecl("FMFreeData")
+public func FMFreeData(_ ptr: UnsafeMutableRawPointer?) {
   free(ptr)
 }
 

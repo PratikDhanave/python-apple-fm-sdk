@@ -114,4 +114,37 @@ the time implications of large batches.
     with open("evaluation_results.json", "w") as f:
         json.dump(results, f, indent=2)
 
+Logging feedback attachments
+----------------------------
+
+When evaluating model quality or investigating unexpected guardrail violations, you can serialize a
+session's transcript, sentiment, categorized issues, and an optional desired output into an attachment
+file for submission via Feedback Assistant using
+:meth:`~apple_fm_sdk.LanguageModelSession.log_feedback_attachment` and :class:`~apple_fm_sdk.LanguageModelFeedback`:
+
+.. code-block:: python
+
+    from pathlib import Path
+    import apple_fm_sdk as fm
+
+    model = fm.SystemLanguageModel(
+        guardrails=fm.SystemLanguageModelGuardrails.PERMISSIVE_CONTENT_TRANSFORMATIONS
+    )
+    session = fm.LanguageModelSession(model=model)
+
+    try:
+        response = await session.respond("Transform this harmless customer note into bullet points.")
+    except fm.GuardrailViolationError:
+        attachment = session.log_feedback_attachment(
+            sentiment=fm.LanguageModelFeedback.Sentiment.NEGATIVE,
+            issues=[
+                fm.LanguageModelFeedback.Issue(
+                    category=fm.LanguageModelFeedback.Issue.Category.TRIGGERED_GUARDRAIL_UNEXPECTEDLY,
+                    explanation="Benign text transformation triggered a guardrail violation.",
+                )
+            ],
+            desired_output="- Bullet point summary of the customer note",
+        )
+        Path("guardrail_feedback.fmf").write_bytes(attachment)
+
 For a evaluation examples, see the git repository under `examples/ <https://github.com/apple/python-apple-fm-sdk/tree/main/examples>`_.

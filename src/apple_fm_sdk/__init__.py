@@ -24,6 +24,12 @@ from .prompt import (
 )
 
 from .transcript import Transcript
+from .feedback import (
+    LanguageModelFeedback,
+    LanguageModelFeedbackSentiment,
+    LanguageModelFeedbackIssue,
+    LanguageModelFeedbackIssueCategory,
+)
 
 from .errors import (
     FoundationModelsError,
@@ -71,6 +77,10 @@ __all__ = [
     "PromptError",
     "ImagePromptError",
     "Transcript",
+    "LanguageModelFeedback",
+    "LanguageModelFeedbackSentiment",
+    "LanguageModelFeedbackIssue",
+    "LanguageModelFeedbackIssueCategory",
     "SystemLanguageModelUseCase",
     "SystemLanguageModelGuardrails",
     "SystemLanguageModelUnavailableReason",
