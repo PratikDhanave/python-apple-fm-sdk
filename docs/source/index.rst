@@ -87,6 +87,7 @@ Documentation Contents
    api/generable
    api/tools
    api/transcript
+   api/feedback
    api/errors
 
 .. toctree::

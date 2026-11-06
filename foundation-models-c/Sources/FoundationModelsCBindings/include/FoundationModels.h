@@ -108,6 +108,42 @@ void FMLanguageModelSessionResponseStreamIterate(FMLanguageModelSessionResponseS
 FMLanguageModelSessionRef _Nullable FMTranscriptCreateFromJSONString(const char *_Nonnull jsonString, int *_Nullable outErrorCode, char *_Nullable *_Nullable outErrorDescription);
 char *_Nullable FMLanguageModelSessionGetTranscriptJSONString(FMLanguageModelSessionRef _Nonnull session, int *_Nullable outErrorCode, char *_Nullable *_Nullable outErrorDescription);
 
+// MARK: - LanguageModelFeedback
+
+typedef enum
+{
+  FMLanguageModelFeedbackSentimentNone = 0,
+  FMLanguageModelFeedbackSentimentPositive = 1,
+  FMLanguageModelFeedbackSentimentNegative = 2,
+  FMLanguageModelFeedbackSentimentNeutral = 3
+} FMLanguageModelFeedbackSentiment;
+
+typedef enum
+{
+  FMLanguageModelFeedbackIssueCategoryUnhelpful = 0,
+  FMLanguageModelFeedbackIssueCategoryTooVerbose = 1,
+  FMLanguageModelFeedbackIssueCategoryDidNotFollowInstructions = 2,
+  FMLanguageModelFeedbackIssueCategoryIncorrect = 3,
+  FMLanguageModelFeedbackIssueCategoryStereotypeOrBias = 4,
+  FMLanguageModelFeedbackIssueCategorySuggestiveOrSexual = 5,
+  FMLanguageModelFeedbackIssueCategoryVulgarOrOffensive = 6,
+  FMLanguageModelFeedbackIssueCategoryTriggeredGuardrailUnexpectedly = 7
+} FMLanguageModelFeedbackIssueCategory;
+
+// Serializes session feedback (transcript, sentiment, issues, and optional desired output)
+// into a Feedback Assistant attachment archive. Free the returned buffer with FMFreeData().
+uint8_t *_Nullable FMLanguageModelSessionLogFeedbackAttachment(
+  FMLanguageModelSessionRef _Nonnull session,
+  FMLanguageModelFeedbackSentiment sentiment,
+  const char *_Nullable issuesJSON,
+  const char *_Nullable desiredResponseText,
+  FMGeneratedContentRef _Nullable desiredResponseContent,
+  const char *_Nullable desiredTranscriptEntryJSON,
+  size_t *_Nonnull outLength,
+  int *_Nullable outErrorCode,
+  char *_Nullable *_Nullable outErrorDescription
+);
+
 // GenerationSchema functions
 FMGenerationSchemaRef _Nonnull FMGenerationSchemaCreate(const char *_Nonnull name, const char *_Nullable description);
 FMGenerationSchemaPropertyRef _Nonnull FMGenerationSchemaPropertyCreate(const char *_Nonnull name, const char *_Nullable description, const char *_Nonnull typeName, bool isOptional);
@@ -147,5 +183,6 @@ void FMTaskCancel(FMTaskRef task);
 void FMRetain(const void *_Nonnull object);
 void FMRelease(const void *_Nonnull object);
 void FMFreeString(char *_Nullable str);
+void FMFreeData(void *_Nullable ptr);
 
 #endif /* FoundationModels_h */

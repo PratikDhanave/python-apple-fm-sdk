@@ -8,6 +8,7 @@ from apple_fm_sdk.transcript import Transcript
 from apple_fm_sdk.prompt import Prompt, _composed_prompt_from_prompt
 from .c_helpers import (
     _ManagedObject,
+    _get_error_string,
     _register_handle,
     _session_callback,
     _session_structured_callback,
@@ -16,13 +17,15 @@ from .c_helpers import (
 )
 from .core import SystemLanguageModel
 from .tool import Tool
-from .generable import Generable, GeneratedContent
+from .generable import ConvertibleToGeneratedContent, Generable, GeneratedContent
 from .generation_schema import GenerationSchema
 from .generation_options import GenerationOptions
 import threading
 import queue
+from collections.abc import Sequence
 from typing import Any, Optional, AsyncIterator, Type, overload, Union
-from .errors import FoundationModelsError
+from .errors import FoundationModelsError, _status_code_to_exception
+from .feedback import LanguageModelFeedbackIssue, LanguageModelFeedbackSentiment
 
 import ctypes
 
@@ -470,7 +473,9 @@ class LanguageModelSession(_ManagedObject):
             gen_schema = generating.generation_schema()
 
             # Use the schema-based respond method
-            generated_content = await self._respond_with_schema(prompt, gen_schema, options)
+            generated_content = await self._respond_with_schema(
+                prompt, gen_schema, options
+            )
 
             # Convert GeneratedContent to the target type
             return generating._from_generated_content(generated_content)
@@ -906,3 +911,200 @@ class LanguageModelSession(_ManagedObject):
             # This must happen after the thread completes to prevent segfaults
             if stream_ptr_holder[0]:
                 lib.FMRelease(stream_ptr_holder[0])
+
+    @staticmethod
+    def _resolve_generated_content(value: Any) -> GeneratedContent:
+        if isinstance(value, GeneratedContent):
+            content_obj = value
+        elif hasattr(value, "generated_content"):
+            content_obj = value.generated_content
+            if not isinstance(content_obj, GeneratedContent):
+                raise TypeError(
+                    "Object's generated_content property must return a GeneratedContent instance"
+                )
+        else:
+            raise TypeError(
+                "desired_response_content must be a GeneratedContent or ConvertibleToGeneratedContent instance"
+            )
+
+        if getattr(content_obj, "_ptr", None) is None:
+            error_code = ctypes.c_int32()
+            error_description = ctypes.POINTER(ctypes.c_char)()
+            fallback_json = json.dumps(
+                getattr(content_obj, "_content_dict", {})
+            ).encode("utf-8")
+            ptr = lib.FMGeneratedContentCreateFromJSON(
+                fallback_json,
+                ctypes.byref(error_code),
+                ctypes.byref(error_description),
+            )
+            if not ptr:
+                err_code, err_desc = _get_error_string(error_code, error_description)
+                raise _status_code_to_exception(
+                    err_code if err_code is not None else error_code.value, err_desc
+                )
+            return GeneratedContent(_ptr=ptr)
+
+        return content_obj
+
+    def log_feedback_attachment(
+        self,
+        sentiment: Optional[LanguageModelFeedbackSentiment] = None,
+        issues: Optional[Sequence[LanguageModelFeedbackIssue]] = None,
+        desired_output: Optional[
+            Union[
+                str,
+                GeneratedContent,
+                ConvertibleToGeneratedContent,
+                Generable,
+                dict[str, Any],
+            ]
+        ] = None,
+        *,
+        desired_response_text: Optional[str] = None,
+        desired_response_content: Optional[
+            Union[GeneratedContent, ConvertibleToGeneratedContent, Generable]
+        ] = None,
+    ) -> bytes:
+        """Serialize session feedback into a Feedback Assistant attachment payload.
+
+        Mirrors Swift's ``LanguageModelSession.logFeedbackAttachment(...)`` overloads,
+        packaging the session's transcript alongside optional sentiment, categorized
+        issues, and an optional desired output example into bytes suitable for saving
+        as a ``.fmf`` attachment file and submitting via Feedback Assistant.
+
+        :param sentiment: Overall sentiment toward the model's output.
+        :type sentiment: Optional[LanguageModelFeedbackSentiment]
+        :param issues: Sequence of categorized issues describing problems with the response.
+        :type issues: Optional[Sequence[LanguageModelFeedbackIssue]]
+        :param desired_output: Expected output as plain text (``str``), structured
+            content (:class:`~apple_fm_sdk.generable.GeneratedContent` or a
+            ``@fm.generable`` instance), or a serialized transcript entry ``dict``
+            (matching an item in ``(await session.transcript.to_dict())["transcript"]["entries"]``).
+        :type desired_output: Optional[Union[str, GeneratedContent, ConvertibleToGeneratedContent, Generable, dict[str, Any]]]
+        :param desired_response_text: Explicit plain-text desired response (mutually
+            exclusive with ``desired_output`` and ``desired_response_content``).
+        :type desired_response_text: Optional[str]
+        :param desired_response_content: Explicit structured desired response (mutually
+            exclusive with ``desired_output`` and ``desired_response_text``).
+        :type desired_response_content: Optional[Union[GeneratedContent, ConvertibleToGeneratedContent, Generable]]
+        :return: Serialized feedback attachment bytes.
+        :rtype: bytes
+        :raises TypeError: If an argument has an unsupported type.
+        :raises ValueError: If more than one desired output parameter is provided.
+        :raises FoundationModelsError: If native feedback serialization fails.
+
+        Example:
+            Save a feedback attachment when an unexpected guardrail error occurs::
+
+                import apple_fm_sdk as fm
+
+                session = fm.LanguageModelSession(
+                    instructions="Summarize the provided note."
+                )
+                attachment = session.log_feedback_attachment(
+                    sentiment=fm.LanguageModelFeedback.Sentiment.NEGATIVE,
+                    issues=[
+                        fm.LanguageModelFeedback.Issue(
+                            category=fm.LanguageModelFeedback.Issue.Category.TRIGGERED_GUARDRAIL_UNEXPECTEDLY,
+                            explanation="Benign input triggered a guardrail violation.",
+                        )
+                    ],
+                    desired_output="A concise one-sentence summary.",
+                )
+        """
+        if sentiment is None:
+            c_sentiment = lib.FMLanguageModelFeedbackSentimentNone
+        elif isinstance(sentiment, LanguageModelFeedbackSentiment):
+            c_sentiment = int(sentiment)
+        else:
+            raise TypeError(
+                "sentiment must be a LanguageModelFeedbackSentiment instance or None"
+            )
+
+        issues_json: Optional[bytes] = None
+        if issues is not None:
+            if isinstance(issues, (str, bytes, dict)) or not hasattr(
+                issues, "__iter__"
+            ):
+                raise TypeError(
+                    "issues must be a sequence of LanguageModelFeedbackIssue instances"
+                )
+            serialized_issues = []
+            for issue in issues:
+                if not isinstance(issue, LanguageModelFeedbackIssue):
+                    raise TypeError(
+                        "All items in issues must be LanguageModelFeedbackIssue instances"
+                    )
+                serialized_issues.append(issue.to_dict())
+            if serialized_issues:
+                issues_json = json.dumps(serialized_issues).encode("utf-8")
+
+        provided_desired = (
+            (1 if desired_output is not None else 0)
+            + (1 if desired_response_text is not None else 0)
+            + (1 if desired_response_content is not None else 0)
+        )
+        if provided_desired > 1:
+            raise ValueError(
+                "Specify at most one of desired_output, desired_response_text, or desired_response_content"
+            )
+
+        c_desired_text: Optional[bytes] = None
+        c_desired_content_obj: Optional[GeneratedContent] = None
+        c_desired_entry_json: Optional[bytes] = None
+
+        if desired_response_text is not None:
+            if not isinstance(desired_response_text, str):
+                raise TypeError("desired_response_text must be a str")
+            c_desired_text = desired_response_text.encode("utf-8")
+        elif desired_response_content is not None:
+            c_desired_content_obj = self._resolve_generated_content(
+                desired_response_content
+            )
+        elif desired_output is not None:
+            if isinstance(desired_output, str):
+                c_desired_text = desired_output.encode("utf-8")
+            elif isinstance(desired_output, GeneratedContent) or hasattr(
+                desired_output, "generated_content"
+            ):
+                c_desired_content_obj = self._resolve_generated_content(desired_output)
+            elif isinstance(desired_output, dict):
+                c_desired_entry_json = json.dumps(desired_output).encode("utf-8")
+            else:
+                raise TypeError(
+                    "desired_output must be a str, GeneratedContent, Generable, dict, or None"
+                )
+
+        c_desired_content_ptr = (
+            c_desired_content_obj._ptr if c_desired_content_obj is not None else None
+        )
+
+        out_length = ctypes.c_size_t(0)
+        error_code = ctypes.c_int(0)
+        error_description = ctypes.POINTER(ctypes.c_char)()
+
+        raw_ptr = lib.FMLanguageModelSessionLogFeedbackAttachment(
+            self._ptr,
+            c_sentiment,
+            issues_json,
+            c_desired_text,
+            c_desired_content_ptr,
+            c_desired_entry_json,
+            ctypes.byref(out_length),
+            ctypes.byref(error_code),
+            ctypes.byref(error_description),
+        )
+        if not raw_ptr:
+            err_code, err_desc = _get_error_string(error_code, error_description)
+            if err_code is not None:
+                raise _status_code_to_exception(err_code, err_desc)
+            error_msg = "Failed to log feedback attachment"
+            if err_desc:
+                error_msg = f"{error_msg}: {err_desc}"
+            raise FoundationModelsError(error_msg)
+
+        try:
+            return ctypes.string_at(raw_ptr, out_length.value)
+        finally:
+            lib.FMFreeData(raw_ptr)
